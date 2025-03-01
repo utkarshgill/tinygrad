@@ -3993,7 +3993,7 @@ class Tensor(SimpleMathTrait):
     ret = ret.reshape(bs, oy, ox, cout).permute(0,3,1,2)
     return ret if bias is None else ret.add(bias.reshape(1, -1, 1, 1))
 
-  def topk(self, k: int, dim: int = -1, largest: bool = True, sorted: bool = True) -> tuple["Tensor", "Tensor"]:
+  def topk(self, k: int, dim: int = -1, largest: bool = True, sorted: bool = True) -> tuple["Tensor", "Tensor"]:  # noqa: A002
     """Returns the k largest or smallest elements of a tensor along a dimension."""
     dim = self._resolve_dim(dim)
     if k > self.shape[dim]:
