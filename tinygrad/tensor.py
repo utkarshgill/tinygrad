@@ -2012,8 +2012,7 @@ class Tensor(SimpleMathTrait):
       i = op(x, axis=dim, keepdim=True)
       idxs = idxs.cat(i, dim=dim)
       x = x.scatter(dim, i, ext)
-    out = self.gather(dim, idxs)
-    return out, idxs
+    return self.gather(dim, idxs), idxs
 
   @staticmethod
   def einsum(formula:str, *operands:Tensor|Sequence[Tensor], acc_dtype:DTypeLike|None=None) -> Tensor:
