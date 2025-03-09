@@ -2004,16 +2004,6 @@ class Tensor(SimpleMathTrait):
     """
     return self._inverse().argmax(axis=axis, keepdim=keepdim)
 
-  def argsort(self, dim=-1, descending=False):
-    x, dim = self, self._resolve_dim(dim)
-    op, ext = (Tensor.argmax, dtypes.min(self.dtype)) if descending else (Tensor.argmin, dtypes.max(self.dtype))
-    idxs = Tensor.empty(self.shape[:dim] + (0,) + self.shape[dim+1:], dtype=dtypes.int64, device=self.device)
-    for _ in range(self.shape[dim]):
-      i = op(x, axis=dim, keepdim=True)
-      idxs = idxs.cat(i, dim=dim)
-      x = x.scatter(dim, i, ext)
-    return idxs
-
   def topk(self, k, dim=-1, largest=True, sorted=True): #noqa: A002
     x, dim = self, self._resolve_dim(dim)
     idxs = Tensor.empty(self.shape[:dim] + (0,) + self.shape[dim+1:], dtype=dtypes.int64, device=self.device)
