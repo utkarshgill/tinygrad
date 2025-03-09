@@ -2023,10 +2023,6 @@ class Tensor(SimpleMathTrait):
       idxs = idxs.cat(i, dim=dim)
       x = x.scatter(dim, i, ext)
     out = self.gather(dim, idxs)
-    if not sorted:
-        order = idxs.argsort(dim=dim, descending=largest)  # reorder based on original input order
-        out = out.gather(dim, order)
-        idxs = idxs.gather(dim, order)
     return out, idxs
 
   @staticmethod
