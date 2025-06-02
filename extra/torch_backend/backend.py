@@ -215,15 +215,15 @@ def max_unpool2d(self:torch.Tensor, indices:torch.Tensor, output_size):
   return wrap(unwrap(self).max_unpool2d(unwrap(indices), output_size=output_size))
 
 @torch.library.impl("aten::arange", "privateuseone")
-def arange(end, dtype=None, device=None, pin_memory=None):
+def arange(end, dtype=None, device=None, pin_memory=None, layout=None):
   return wrap(Tensor.arange(0, end, dtype=_from_torch_dtype(dtype or torch.get_default_dtype())))
 
 @torch.library.impl("aten::arange.start", "privateuseone")
-def arange_start(start, end, dtype=None, device=None, pin_memory=None):
+def arange_start(start, end, dtype=None, device=None, pin_memory=None, layout=None):
   return wrap(Tensor.arange(start, end, dtype=_from_torch_dtype(dtype or torch.get_default_dtype())))
 
 @torch.library.impl("aten::arange.start_step", "privateuseone")
-def arange_start_step(start, end, step, dtype=None, device=None, pin_memory=None):
+def arange_start_step(start, end, step, dtype=None, device=None, pin_memory=None, layout=None):
   return wrap(Tensor.arange(start, end, step, dtype=_from_torch_dtype(dtype or torch.get_default_dtype())))
 
 @torch.library.impl("aten::convolution_overrideable", "privateuseone")

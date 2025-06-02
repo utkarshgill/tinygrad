@@ -1270,7 +1270,10 @@ class Tensor(MathTrait):
     from tinygrad.shape.shapetracker import ShapeTracker, View
     from extra.to_movement_ops import to_movement_ops, apply_mop, MovementOps
 
-    st = ShapeTracker(self.lazydata.st.views + (View.create(tuple(size), tuple(stride), storage_offset),))
+    base_views = () if self.lazydata.st is None else self.lazydata.st.views
+    new_view = View.create(size, stride, storage_offset)
+    st = ShapeTracker(base_views + (new_view,))
+
     mops = to_movement_ops(st)
     ret = self
     if mops and mops[0] == (MovementOps.RESHAPE, self.shape): mops = mops[1:]
