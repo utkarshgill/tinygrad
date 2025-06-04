@@ -307,6 +307,15 @@ def scatter_add(self, dim, index, src, out):
   if self.shape == (): return wrap(out.assign(src))
   return wrap(out.assign(Tensor.scatter_reduce(self, dim, index, src, reduce='sum')))
 
+@torch.library.impl("aten::index_add.out", "privateuseone")
+@inplace_fn("out")
+def index_add(self, dim, index, src, out):
+  self, index, src, out = unwrap(self), unwrap(index), unwrap(src), unwrap(out)
+  if self.shape == (): return wrap(out.assign(src))
+  # broadcast index to match src dimensions for scatter_reduce
+  idx = index.reshape(tuple(index.shape[0] if i == dim else 1 for i in range(src.ndim))).expand(src.shape)
+  return wrap(out.assign(Tensor.scatter_reduce(self, dim, idx, src, reduce='sum')))
+
 @torch.library.impl("aten::_copy_from", "privateuseone")
 def _copy_from(src: torch.Tensor, dest, non_blocking=False):
   realize = dest.is_tiny and maybe_realize_storage(unwrap(dest))
@@ -641,10 +650,3 @@ def _optimizer_patched_init(self, *args, **kwargs):
   _optimizer_init(self, *args, **kwargs)
   self.register_step_post_hook(realize_optimizer_step)
 torch.optim.Optimizer.__init__ = _optimizer_patched_init
-
-@torch.library.impl("aten::index_add.out", "privateuseone")
-@inplace_fn("out")
-def index_add(self, dim, index, src, out):
-  self, index, src, out = unwrap(self), unwrap(index), unwrap(src), unwrap(out)
-  if self.shape == (): return wrap(out.assign(src))
-  return wrap(out.assign(Tensor.scatter_reduce(self, dim, index, src, reduce='sum')))
