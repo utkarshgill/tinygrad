@@ -2759,6 +2759,18 @@ class Tensor(MathTrait):
     shrink_to_k = tuple((0, k) if i == dim else None for i in range(self.ndim))
     return x.shrink(shrink_to_k), idx.shrink(shrink_to_k)
 
+  def svd(self, full_matrices: bool = True, compute_uv: bool = True) -> tuple[Tensor, Tensor, Tensor]|Tensor:
+    """Computes the singular value decomposition of the tensor using numpy."""
+    import numpy as np
+    res = np.linalg.svd(self.numpy(), full_matrices=full_matrices, compute_uv=compute_uv)
+    if compute_uv:
+      U, S, Vh = res
+      return (Tensor(U, device=self.device, dtype=self.dtype),
+              Tensor(S, device=self.device, dtype=self.dtype),
+              Tensor(Vh, device=self.device, dtype=self.dtype))
+    else:
+      return Tensor(res, device=self.device, dtype=self.dtype)
+
   # ***** unary ops *****
 
   def logical_not(self) -> Tensor:

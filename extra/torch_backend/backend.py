@@ -345,6 +345,19 @@ def sort_values(input, dim=-1, descending=False, stable=True, values=None, indic
   unwrap(indices).assign(out_indices.cast(dtypes.int64))
   return wrap(out_values), wrap(out_indices)
 
+@torch.library.impl("aten::_linalg_svd.default", "privateuseone")
+def linalg_svd_default(A: torch.Tensor, full_matrices=False, compute_uv=True, *, driver=None):
+  return tuple(wrap(x) for x in unwrap(A).svd(full_matrices, compute_uv))
+
+@torch.library.impl("aten::_linalg_svd.U", "privateuseone")
+@inplace_fn(["U", "S", "Vh"])
+def linalg_svd_out(A: torch.Tensor, full_matrices=False, compute_uv=True, *, driver=None, U=None, S=None, Vh=None):
+  outU, outS, outVh = unwrap(A).svd(full_matrices, compute_uv)
+  unwrap(U).assign(outU)
+  unwrap(S).assign(outS)
+  unwrap(Vh).assign(outVh)
+  return wrap(outU), wrap(outS), wrap(outVh)
+
 # register some decompositions
 from torch._decomp import get_decompositions
 decomps = [

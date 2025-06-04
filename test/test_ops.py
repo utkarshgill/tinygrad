@@ -1122,6 +1122,11 @@ class TestOps(unittest.TestCase):
     np.testing.assert_equal(indices.numpy(), [2, 4, 6])
     self.helper_test_exception([(4)], lambda x: x.topk(5), lambda x: x.topk(5), expected=(RuntimeError, ValueError))
 
+  def test_svd(self):
+    helper_test_op([(5, 3)], lambda x: torch.linalg.svd(x).U, lambda x: x.svd()[0], forward_only=True)
+    helper_test_op([(5, 3)], lambda x: torch.linalg.svd(x).S, lambda x: x.svd()[1], forward_only=True)
+    helper_test_op([(5, 3)], lambda x: torch.linalg.svd(x).Vh, lambda x: x.svd()[2], forward_only=True)
+
   def test_einsum(self):
     # matrix transpose
     helper_test_op([(150,150)], lambda a: torch.einsum('ij->ji', a), lambda a: Tensor.einsum('ij->ji', a))
