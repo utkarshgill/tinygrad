@@ -1,12 +1,15 @@
 from __future__ import annotations
 from dataclasses import dataclass, replace
 from collections import defaultdict
-from typing import Optional, Any, Iterator, Generator
+from typing import Optional, Any, Iterator, Generator, TYPE_CHECKING
 import multiprocessing, importlib, inspect, functools, pathlib, os, ctypes, ctypes.util, platform, contextlib, sys, re, atexit, pickle, decimal, time
 from tinygrad.helpers import CI, OSX, LRU, getenv, diskcache_get, diskcache_put, DEBUG, GlobalCounters, flat_mv, from_mv, PROFILE, temp, mv_address, \
                              cpu_time_execution, colored, Context, round_up
 from tinygrad.dtype import DType, ImageDType, PtrDType, dtypes, _to_np_dtype
 from tinygrad.renderer import Renderer
+
+if int(os.getenv("TYPED", "0")) or TYPE_CHECKING:
+  import numpy as np
 
 # **************** Device ****************
 

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Optional, Union, Callable, cast, TYPE_CHECKING, Type, get_args
+from typing import Any, Optional, Union, Callable, cast, TYPE_CHECKING, Type, get_args, Sequence
 import sys, time, functools, itertools, math, operator, hashlib, os, types, pickle, pathlib, inspect, weakref
 from enum import auto, IntEnum, Enum
 from dataclasses import dataclass, field
@@ -686,7 +686,7 @@ def exec_alu(op:Ops, dtype:DType, operands, truncate_output=True):
 
 # ***** uop helpers *****
 
-def print_uops(uops:list[UOp]):
+def print_uops(uops:Sequence[UOp]):
   for i,u in enumerate(uops):
     formatted_parents = [(uops.index(x) if x.op is not Ops.CONST else f"{x.arg}") if x in uops else "--" for x in u.src]
     print(f"{i:4d} {str(u.op):20s}: {str(u.dtype):30s} " f"{str(formatted_parents):32s} {u.arg}")
@@ -744,7 +744,8 @@ class UPat(MathTrait):
   def var(name:Optional[str]=None, dtype:Optional[Union[DType, tuple[DType, ...]]]=None): return UPat(dtype=dtype, name=name)
   @staticmethod
   @functools.cache
-  def cvar(name:Optional[str]=None, dtype:Optional[DType]=None, vec=True): return UPat((Ops.CONST,Ops.VCONST) if vec else Ops.CONST, dtype, name=name)
+  def cvar(name:Optional[str]=None, dtype:Optional[Union[DType, tuple[DType, ...]]]=None, vec=True):
+    return UPat((Ops.CONST,Ops.VCONST) if vec else Ops.CONST, dtype, name=name)
   @staticmethod
   def const(dtype:Optional[Union[DType, tuple[DType, ...]]], b:ConstType): return UPat(Ops.CONST, dtype=dtype, arg=b)
 
@@ -822,7 +823,7 @@ class PatternMatcher:
   @functools.cache  # pylint: disable=method-cache-max-size-none
   def __add__(self, more:PatternMatcher): return PatternMatcher(self.patterns+more.patterns)
 
-  def rewrite(self, uop:UOp, ctx=None) -> UOp|None:
+  def rewrite(self, uop:UOp, ctx=None) -> Any:
     ler = {u.op for u in uop.src}
     for p,fxn,early_reject,has_ctx in self.pdict.get(uop.op, []):
       if not early_reject.issubset(ler): continue
@@ -870,7 +871,7 @@ def track_matches(func):
   return _track_func
 
 class TrackedPatternMatcher(PatternMatcher):
-  def rewrite(self, uop:UOp, ctx=None) -> UOp|None:
+  def rewrite(self, uop:UOp, ctx=None) -> Any:
     ret = None
     ler = {u.op for u in uop.src}
     for p,fxn,early_reject,has_ctx in self.pdict.get(uop.op, []):

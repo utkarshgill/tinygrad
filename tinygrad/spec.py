@@ -162,7 +162,9 @@ shape_spec = PatternMatcher([
 
 # ***** uop helpers *****
 
-def type_verify(uops:list[UOp], *extra_specs:PatternMatcher):
+from collections.abc import Sequence
+
+def type_verify(uops:Sequence[UOp], *extra_specs:PatternMatcher):
   specs = [spec, *extra_specs]
   for i,u in enumerate(uops):
     spec_ret = [cast(bool|None, s.rewrite(u)) for s in specs]

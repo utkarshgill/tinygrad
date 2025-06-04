@@ -177,6 +177,16 @@ python3 test/test_ops.py                # just the ops tests
 python3 -m pytest test/                 # whole test suite
 ```
 
+### Runtime type checking
+
+tinygrad supports optional runtime type checking using
+[typeguard](https://github.com/agronholm/typeguard). Enable it by setting
+`TYPED=1` in the environment:
+
+```sh
+TYPED=1 python3 -m pytest test/test_tiny.py
+```
+
 #### Process replay tests
 
 [Process replay](https://github.com/tinygrad/tinygrad/blob/master/test/external/process_replay/README.md) compares your PR's generated kernels against master. If your PR is a refactor or speedup without any expected behavior change, It should include [pr] in the pull request title.
