@@ -1274,7 +1274,7 @@ class Tensor(MathTrait):
     mops = to_movement_ops(st)
     if mops and mops[0] == (MovementOps.RESHAPE, self.shape): mops = mops[1:]
     ret = self
-    for mo in mops: ret = apply_mop(ret, mo)
+    for mo in mops: ret = apply_mop(ret, mo) # type: ignore
     return ret
 
   def cat(self:Tensor, *args:Tensor, dim:int=0) -> Tensor:
