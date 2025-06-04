@@ -307,6 +307,18 @@ def scatter_add(self, dim, index, src, out):
   if self.shape == (): return wrap(out.assign(src))
   return wrap(out.assign(Tensor.scatter_reduce(self, dim, index, src, reduce='sum')))
 
+@torch.library.impl("aten::index_add.out", "privateuseone")
+@inplace_fn("out")
+def index_add(self, dim, index, src, out, alpha=1):
+  self, index, src, out = unwrap(self), unwrap(index), unwrap(src), unwrap(out)
+  if alpha != 1: src = src * alpha
+  if self.shape == (): return wrap(out.assign(src))
+  # reshape and expand 1D index to full src shape
+  prefix = (1,)*dim
+  suffix = (1,)*(src.ndim - dim - 1)
+  idx = index.reshape(*prefix, -1, *suffix).expand(src.shape)
+  return wrap(out.assign(Tensor.scatter_reduce(self, dim, idx, src, reduce='sum')))
+
 @torch.library.impl("aten::_copy_from", "privateuseone")
 def _copy_from(src: torch.Tensor, dest, non_blocking=False):
   realize = dest.is_tiny and maybe_realize_storage(unwrap(dest))
