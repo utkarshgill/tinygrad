@@ -4100,7 +4100,7 @@ class Tensor(SimpleMathTrait):
     # groups*cout x cin x H, W
     cw = w.transpose(w.ndim-1, w.ndim-2).reshape((groups*cout, cin, 1, 1))
     ret = cx.image_conv2d(cw, groups=groups, dtype=dtype).reshape(out_shape_t).transpose(self.ndim-1, self.ndim-2)
-    # match dot when no dtype is passed, but fall back to float32 if unsupported
+    # follow dot's promotion semantics, falling back to float32 if unsupported (#6378)
     out_dtype = least_upper_dtype(self.dtype, w.dtype) if dtype is None else to_dtype(dtype)
     if not is_dtype_supported(out_dtype, Device.DEFAULT):
       out_dtype = least_upper_dtype(out_dtype, dtypes.float32)
