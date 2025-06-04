@@ -10,7 +10,7 @@ from tinygrad.helpers import IMAGE, WINO, Metadata, TRACEMETA, ceildiv, fetch, p
 from tinygrad.gradient import compute_gradient
 from tinygrad.uop.ops import smax, smin, resolve, UOp, Ops, sint, Variable, MathTrait, identity_element, all_metadata
 from tinygrad.uop.spec import tensor_uop_spec, type_verify
-from tinygrad.device import Device, Buffer
+from tinygrad.device import Device, Buffer, is_dtype_supported
 from tinygrad.engine.realize import run_schedule
 from tinygrad.engine.memory import memory_planner
 from tinygrad.engine.schedule import ScheduleItem, create_schedule_with_vars
@@ -4184,7 +4184,12 @@ class Tensor(MathTrait):
     cx = self.transpose(self.ndim-1, self.ndim-2).reshape((bs//groups, groups*cin, -1, 1))
     # groups*cout x cin x H, W
     cw = w.transpose(w.ndim-1, w.ndim-2).reshape((groups*cout, cin, 1, 1))
-    return cx.image_conv2d(cw, groups=groups, dtype=dtype).reshape(out_shape_t).transpose(self.ndim-1, self.ndim-2)
+    ret = cx.image_conv2d(cw, groups=groups, dtype=dtype).reshape(out_shape_t).transpose(self.ndim-1, self.ndim-2)
+    # match dot when no dtype is passed, but fall back to float32 if unsupported
+    out_dtype = least_upper_dtype(self.dtype, w.dtype) if dtype is None else to_dtype(dtype)
+    if not is_dtype_supported(out_dtype, Device.DEFAULT):
+      out_dtype = least_upper_dtype(out_dtype, dtypes.float32)
+    return ret.cast(out_dtype)
 
   def image_conv2d(self, weight:Tensor, bias:Tensor|None=None, groups=1, stride=1, dilation=1, padding=0, dtype=None) -> Tensor:
     base_image_type = dtypes.imageh if getenv("FLOAT16", 0) else dtypes.imagef
