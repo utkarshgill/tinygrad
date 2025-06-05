@@ -2,8 +2,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import functools
-from typing import Optional, Callable
-from tinygrad.helpers import merge_dicts, getenv
+from typing import Optional, Callable, List, Tuple
+from tinygrad.helpers import merge_dicts, getenv, prod
 from tinygrad.shape.view import View, strides_for_shape, unravel
 from tinygrad.dtype import dtypes
 from tinygrad.uop.ops import UOp, Ops, graph_rewrite, Variable, sint, sint_to_uop, Context, PatternMatcher, UPat, GroupOp
@@ -21,6 +21,73 @@ def handle_upcast(u: UOp) -> UOp|None:
     return u.replace(dtype=dtype, src=tuple([x.cast(dtype) for x in u.src])).cast(u.dtype)
   return None
 pm_upcast = PatternMatcher([(UPat(GroupOp.ALU, dtype=dtypes.int, name="u"), handle_upcast),])
+
+# movement op helper for Tensors
+def apply_mop(t, mop):
+  op, arg = mop
+  if   op is Ops.RESHAPE: return t.reshape(arg)
+  elif op is Ops.PERMUTE: return t.permute(arg)
+  elif op is Ops.EXPAND:  return t.expand(arg)
+  elif op is Ops.PAD:     return t.pad(arg)
+  elif op is Ops.SHRINK:  return t.shrink(arg)
+  elif op is Ops.FLIP:    return t.flip(arg)
+  else: raise RuntimeError(f"apply_mop got unexpected op {op}")
+
+@functools.cache
+def st_to_movement_ops(st: ShapeTracker) -> List[Tuple[Ops, Tuple]]:
+  to_apply: List[Tuple[Ops, Tuple]] = []
+
+  def sort_by_strides(shape, strides):
+    return (
+      sorted(zip(shape, strides), key=lambda k: (k[1], -k[0]), reverse=True),
+      sorted(range(len(strides)), key=lambda k: (strides[k], -shape[k]), reverse=True)
+    )
+
+  for prev_view, v in zip(st.views, st.views[1:]):
+    real_shape = tuple(y - x for x, y in (v.mask or [(0, s) for s in v.shape]))
+    offset = v.offset + sum(st * (s - 1) for s, st in zip(real_shape, v.strides) if st < 0)
+    real_offset = offset + (sum(x * st for (x, _), st in zip(v.mask, v.strides)) if v.mask else 0)
+    real_real_shape = [s for s, st in zip(real_shape, v.strides) if st]
+    strides = [abs(st) if isinstance(st, int) else st for st in v.strides if st]
+    buffer_size = prod(prev_view.shape) - real_offset if real_shape else 1
+    ordered_shape_strides, order = sort_by_strides(real_real_shape, strides)
+    flatten_shape = (prod(prev_view.shape),)
+    to_apply.extend([(Ops.RESHAPE, flatten_shape), (Ops.SHRINK, ((real_offset, real_offset + buffer_size),))])
+    if strides:
+      if ordered_shape_strides[0][0] * ordered_shape_strides[0][1] - buffer_size > 0:
+        to_apply.append((Ops.PAD, ((0, ordered_shape_strides[0][0] * ordered_shape_strides[0][1] - buffer_size),)))
+      for idx, shape_stride in enumerate(ordered_shape_strides):
+        if idx < len(ordered_shape_strides) - 1 and shape_stride[1] < ordered_shape_strides[idx + 1][0] * ordered_shape_strides[idx + 1][1]:
+          remaining_buffer = ordered_shape_strides[idx - 1][1] if idx > 0 else buffer_size
+          to_apply.append((Ops.EXPAND, (shape_stride[0], *(s[0] for s in ordered_shape_strides[:idx]), remaining_buffer)))
+          to_apply.append((Ops.PERMUTE, (*range(1, idx + 1), 0, idx + 1)))
+          to_apply.append((Ops.RESHAPE, (*(s[0] for s in ordered_shape_strides[:idx]), shape_stride[0] * remaining_buffer)))
+          to_apply.append((Ops.PAD, (*((0, 0) for _ in range(idx)), (0, shape_stride[0] * shape_stride[1]))))
+          to_apply.append((Ops.RESHAPE, (*(s[0] for s in ordered_shape_strides[:idx + 1]), remaining_buffer + shape_stride[1])))
+          ordered_shape_strides[idx] = (ordered_shape_strides[idx][0], remaining_buffer + shape_stride[1])
+        else:
+          to_apply.append((Ops.SHRINK, (*((0, s[0]) for s in ordered_shape_strides[:idx]), (0, shape_stride[0] * shape_stride[1]))))
+          to_apply.append((Ops.RESHAPE, (*[s[0] for s in ordered_shape_strides[:idx + 1]], shape_stride[1])))
+      to_apply.extend([
+        (Ops.SHRINK, (*[(0, s[0]) for s in ordered_shape_strides], (0, 1))),
+        (Ops.RESHAPE, tuple(s[0] for s in ordered_shape_strides)),
+      ])
+      if order != list(range(len(order))):
+        to_apply.append((Ops.PERMUTE, tuple(order.index(i) for i in range(len(strides)))))
+    to_apply.append((Ops.RESHAPE, tuple(s if d else 1 for s, d in zip(real_shape, v.strides))))
+    if any(d < 0 for d in v.strides):
+      to_apply.append((Ops.FLIP, tuple(-1 if d < 0 else 1 for d in v.strides)))
+    if v.mask is not None:
+      pre_expand_pads = tuple((x, s - y) if d != 0 else (0, 0) for (x, y), s, d in zip(v.mask, v.shape, v.strides))
+      post_expand_pads = tuple((x, s - y) if d == 0 else (0, 0) for (x, y), s, d in zip(v.mask, v.shape, v.strides))
+      if any(p != (0, 0) for p in pre_expand_pads):
+        to_apply.append((Ops.PAD, pre_expand_pads))
+        real_shape = tuple(x + p[0] + p[1] for x, p in zip(real_shape, pre_expand_pads))
+    if any(s != 1 and d == 0 for s, d in zip(real_shape, v.strides)):
+      to_apply.append((Ops.EXPAND, real_shape))
+    if v.mask is not None and any(p != (0, 0) for p in post_expand_pads):
+      to_apply.append((Ops.PAD, post_expand_pads))
+  return to_apply
 
 @functools.cache
 def views_to_indexed_uops(views: tuple[View, ...], _idxs:Optional[tuple[UOp, ...]]=None) -> tuple[UOp, UOp]:
@@ -88,6 +155,8 @@ class ShapeTracker:
   def to_uop(self) -> UOp: return UOp(Ops.VIEW, dtypes.void, (), self)
   def to_indexed_uops(self, _idxs:Optional[list[UOp]|tuple[UOp, ...]]=None) -> tuple[UOp, UOp]:
     return views_to_indexed_uops(self.views, tuple(_idxs) if _idxs is not None else None)
+
+  def to_movement_ops(self) -> List[Tuple[Ops, Tuple]]: return st_to_movement_ops(self)
 
   # upper bound on buffer size required to fit this shapetracker
   def real_size(self) -> int:
