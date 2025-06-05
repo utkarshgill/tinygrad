@@ -26,11 +26,11 @@ pm_upcast = PatternMatcher([(UPat(GroupOp.ALU, dtype=dtypes.int, name="u"), hand
 def apply_mop(t, mop):
   op, arg = mop
   if op is Ops.RESHAPE: return t.reshape(arg)
-  elif op is Ops.PERMUTE: return t.permute(arg)
-  elif op is Ops.EXPAND: return t.expand(arg)
-  elif op is Ops.PAD: return t.pad(arg)
-  elif op is Ops.SHRINK: return t.shrink(arg)
-  elif op is Ops.FLIP: return t.flip(arg)
+  if op is Ops.PERMUTE: return t.permute(arg)
+  if op is Ops.EXPAND: return t.expand(arg)
+  if op is Ops.PAD: return t.pad(arg)
+  if op is Ops.SHRINK: return t.shrink(arg)
+  if op is Ops.FLIP: return t.flip(arg)
   else: raise RuntimeError(f"apply_mop got unexpected op {op}")
 
 @functools.cache
