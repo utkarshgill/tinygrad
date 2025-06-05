@@ -31,7 +31,7 @@ def apply_mop(t, mop):
   if op is Ops.PAD: return t.pad(arg)
   if op is Ops.SHRINK: return t.shrink(arg)
   if op is Ops.FLIP: return t.flip(arg)
-  else: raise RuntimeError(f"apply_mop got unexpected op {op}")
+  raise RuntimeError(f"apply_mop got unexpected op {op}")
 
 @functools.cache
 def st_to_movement_ops(st: ShapeTracker) -> List[Tuple[Ops, Tuple]]:
