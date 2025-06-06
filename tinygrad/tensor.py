@@ -4268,6 +4268,11 @@ class Tensor(MathTrait):
 
     # NCHW output
     ret = ret.reshape(bs, oy, ox, cout).permute(0,3,1,2)
+    if dtype is None:
+      # when dtype=None, output should be least_upper_dtype of inputs (matching non-image path)
+      out_dtype = least_upper_dtype(self.dtype, weight.dtype)
+      if ret.dtype != out_dtype: ret = ret.cast(out_dtype)
+
     return ret if bias is None else ret.add(bias.reshape(1, -1, 1, 1))
 
 P = ParamSpec("P")
