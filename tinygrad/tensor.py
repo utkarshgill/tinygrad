@@ -4211,7 +4211,7 @@ class Tensor(MathTrait):
     return cx.image_conv2d(cw, groups=groups, dtype=dtype).reshape(out_shape_t).transpose(self.ndim-1, self.ndim-2)
 
   def image_conv2d(self, weight:Tensor, bias:Tensor|None=None, groups=1, stride=1, dilation=1, padding=0, dtype=None) -> Tensor:
-    base_image_type = dtypes.imageh if getenv("FLOAT16", 0) else dtypes.imagef
+    base_image_type = dtypes.imageh if self.dtype==dtypes.half or getenv("FLOAT16", 0) else dtypes.imagef
 
     (bs,_,iy,ix), (cout,cin,H,W) = self.shape, weight.shape
     x, w = self, weight.reshape(groups, (rcout := cout//groups), cin, H, W)
@@ -4260,6 +4260,9 @@ class Tensor(MathTrait):
 
     # the conv!
     ret = (x*w).cast(base_image_type((bs*oy, ox*cout//4, 4)) if IMAGE >= 2 else dtypes.float32).sum((-4, -3, -2, -1), dtype=dtype)
+    
+    # like the non-image path, cast to the appropriate dtype when dtype is None
+    if dtype is None: ret = ret.cast(least_upper_dtype(self.dtype, weight.dtype))
 
     # undo hack for non multiples of 4 on C.rcout
     if added_output_channels != 0:
@@ -4268,11 +4271,6 @@ class Tensor(MathTrait):
 
     # NCHW output
     ret = ret.reshape(bs, oy, ox, cout).permute(0,3,1,2)
-    if dtype is None:
-      # when dtype=None, output should be least_upper_dtype of inputs (matching non-image path)
-      out_dtype = least_upper_dtype(self.dtype, weight.dtype)
-      if ret.dtype != out_dtype: ret = ret.cast(out_dtype)
-
     return ret if bias is None else ret.add(bias.reshape(1, -1, 1, 1))
 
 P = ParamSpec("P")
