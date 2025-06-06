@@ -4259,7 +4259,7 @@ class Tensor(MathTrait):
     w = w.permute(0,4,2,5,1,3).reshape((1, 1, 1, *cout_expand, rcin_hi, rcin_lo, H, W))
 
     # the conv!
-    ret = (x*w).cast(base_image_type((bs*oy, ox*cout//4, 4)) if IMAGE >= 2 else dtypes.float32).sum((-4, -3, -2, -1), dtype=dtype)
+    ret = (x*w).cast(least_upper_dtype(self.dtype, weight.dtype) if dtype is None else base_image_type((bs*oy, ox*cout//4, 4)) if IMAGE >= 2 else dtypes.float32).sum((-4, -3, -2, -1), dtype=dtype)
 
     # undo hack for non multiples of 4 on C.rcout
     if added_output_channels != 0:
