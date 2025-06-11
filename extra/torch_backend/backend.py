@@ -270,6 +270,32 @@ def select_backward(grad_out, input_sizes, dim, index):
   grad_input[slices] = unwrap(grad_out)
   return wrap(grad_input)
 
+@torch.library.impl("aten::diagonal", "privateuseone")
+def diagonal(self, offset: int = 0, dim1: int = 0, dim2: int = 1):
+  t = unwrap(self)
+  nd = t.ndim
+  dim1 = dim1 if dim1 >= 0 else dim1 + nd
+  dim2 = dim2 if dim2 >= 0 else dim2 + nd
+  if dim1 == dim2: raise RuntimeError("diagonal dimensions must be different")
+  if dim1 > dim2: dim1, dim2 = dim2, dim1  # ensure dim1 < dim2 for easier handling
+  shape = t.shape
+  d1, d2 = shape[dim1], shape[dim2]
+  if offset >= 0:
+    diag_len = max(0, min(d1, d2 - offset))
+    start1, start2 = 0, offset
+  else:
+    diag_len = max(0, min(d1 + offset, d2))
+    start1, start2 = -offset, 0
+  if diag_len == 0:
+    out_shape = shape[:dim1] + shape[dim1+1:dim2] + shape[dim2+1:] + (0,)
+    return wrap(Tensor.empty(*out_shape, device=t.device, dtype=t.dtype))
+  idx = Tensor.arange(diag_len, device=t.device, dtype=dtypes.int32)
+  slices = [slice(None)] * nd
+  slices[dim1] = idx + start1
+  slices[dim2] = idx + start2
+  diag = t[slices]
+  return wrap(diag)
+
 def avg_pool(self, kernel_size, stride=[], padding=0, ceil_mode=False, count_include_pad=True, divisor_override=None):
   return wrap(unwrap(self).avg_pool2d(kernel_size, stride if stride != [] else None, padding=padding, ceil_mode=ceil_mode, count_include_pad=count_include_pad))
 
