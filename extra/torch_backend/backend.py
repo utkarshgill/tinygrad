@@ -294,7 +294,8 @@ def diagonal(self, offset: int = 0, dim1: int = 0, dim2: int = 1):
   slices[dim1] = idx + start1
   slices[dim2] = idx + start2
   diag = t[slices]
-  return wrap(diag)
+  # Ensure the returned diagonal tensor is contiguous to avoid issues with as_strided on certain stride patterns.
+  return wrap(diag.contiguous())
 
 def avg_pool(self, kernel_size, stride=[], padding=0, ceil_mode=False, count_include_pad=True, divisor_override=None):
   return wrap(unwrap(self).avg_pool2d(kernel_size, stride if stride != [] else None, padding=padding, ceil_mode=ceil_mode, count_include_pad=count_include_pad))
