@@ -207,8 +207,8 @@ class TestTorchBackend(unittest.TestCase):
       self.assertLessEqual(GlobalCounters.global_ops, 10_000_000)
 
   def _check_diag(self, *shape, dtype=torch.float32):
-    a = torch.randn(*shape, dtype=dtype)
-    ref = np.diagonal(a.numpy(), axis1=-2, axis2=-1)
+    a = torch.randn(*shape, dtype=dtype, device=device)
+    ref = np.diagonal(a.cpu().numpy(), axis1=-2, axis2=-1)
     linalg_tiny = torch.linalg.diagonal(a)
     np.testing.assert_equal(linalg_tiny.cpu().numpy(), ref)
 
