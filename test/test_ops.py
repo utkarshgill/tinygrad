@@ -1287,11 +1287,11 @@ class TestOps(unittest.TestCase):
     helper_test_op([(64,64), (64,64)], lambda x,y: x.half().matmul(y.half()), atol=5e-3, rtol=5e-3)
   
   def test_gemm_fp16_image_path_dtype(self):
-    with set_env(IMAGE=2):
+    with Context(IMAGE=2):
       x = Tensor.ones(64, 64).half()
       y = Tensor.ones(64, 64).half() 
-      z = x.matmul(y)  # Don't .realize()
-      # Verify we took image path and dtype is preserved
+      z = x.matmul(y)  # don't .realize()
+      # verify we took image path and dtype is preserved
       assert any('image_conv2d' in str(op) for op in z.schedule()), "Should use image path"
       assert z.dtype == dtypes.half, f"Expected half, got {z.dtype}"
   
