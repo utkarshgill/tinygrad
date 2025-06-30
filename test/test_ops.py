@@ -1290,7 +1290,7 @@ class TestOps(unittest.TestCase):
     with Context(IMAGE=2):
       x = Tensor.rand(64, 64)
       y = Tensor.rand(64, 64)
-      z = x.half().matmul(y.half())  # don't .realize()
+      z = x.half().matmul(y.half()) # don't realize
       assert z.dtype == dtypes.half, f"Expected half, got {z.dtype}"
   
   def test_gemm(self):
