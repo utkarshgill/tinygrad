@@ -1282,9 +1282,19 @@ class TestOps(unittest.TestCase):
                                                                          np.arange(64,128,dtype=np.float32).reshape(8,8)])
   def test_small_gemm_eye(self):
     helper_test_op(None, lambda x,y: x.matmul(y), lambda x,y: x@y, vals=[np.eye(8).astype(np.float32), np.eye(8).astype(np.float32)])
-  @unittest.skipIf(CI and Device.DEFAULT in ["NV", "LLVM", "CUDA"], "not supported on these in CI")
+  @unittest.skipIf(CI and Device.DEFAULT in ["NV", "LLVM", "GPU", "CUDA"], "not supported on these in CI")
   def test_gemm_fp16(self):
     helper_test_op([(64,64), (64,64)], lambda x,y: x.half().matmul(y.half()), atol=5e-3, rtol=5e-3)
+  
+  def test_gemm_fp16_image_path_dtype(self):
+    with set_env(IMAGE=2):
+      x = Tensor.ones(64, 64).half()
+      y = Tensor.ones(64, 64).half() 
+      z = x.matmul(y)  # Don't .realize()
+      # Verify we took image path and dtype is preserved
+      assert any('image_conv2d' in str(op) for op in z.schedule()), "Should use image path"
+      assert z.dtype == dtypes.half, f"Expected half, got {z.dtype}"
+  
   def test_gemm(self):
     helper_test_op([(64,64), (64,64)], lambda x,y: x.matmul(y))
   def test_big_gemm(self):
