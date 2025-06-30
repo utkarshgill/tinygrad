@@ -151,23 +151,11 @@ class LLVMRenderer(Renderer):
     local_args: list[str] = []
     acc_to_assign: dict[UOp, UOp] = {}
     for u in uops:
-      if u.op is Ops.ASSIGN: # prealloc all assigns
+      if u.op is Ops.STORE and len(u.src) > 0 and u.src[0].op in {Ops.DEFINE_REG, Ops.DEFINE_GLOBAL}: # register assignment (was ASSIGN)
         vc += 1
         r[u] = r[u.src[1]] = f"%assign{vc}"
         assert u.src[0] not in acc_to_assign, "can't assign to DEFINE_ACC twice"
         acc_to_assign[u.src[0]] = u.src[1]
-      if AMX and u.op is Ops.WMMA: # prealloc aux buffers as AMX can only load from memory
-        vc += 1
-        r[u] = f"%wmma{vc}"
-        for i, dtype in enumerate(u.arg[2].vec(sz) for sz in [prod(size for _, size in upcast) for upcast in u.arg[6]]):
-          kernel += [f"  {r[u]}_amx{i} = alloca {ldt(dtype)}, align {dtype.itemsize}",
-                     f"  {r[u]}_ptr_amx{i} = ptrtoint {ldt(dtype.ptr())} {r[u]}_amx{i} to i64"]
-
-    name = "test"
-    for u in uops:
-      if u.op is Ops.SINK:
-        if u.arg is not None: name = u.arg.function_name
-        continue
       if u.op in (Ops.DEFINE_GLOBAL, Ops.DEFINE_VAR):
         r[u] = f"%data{u.arg}" if u.op is Ops.DEFINE_GLOBAL else f"%{u.arg[0]}"
         args.append((r[u], u.dtype))
