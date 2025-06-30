@@ -141,9 +141,24 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     if self.op in GroupOp.Movement: return unwrap(self.src[0].st).mop(self.op, self.arg)
     # CONST with a DEVICE has a shape of ()
     if self.op is Ops.CONST and len(self.src) and self.src[0].op is Ops.DEVICE: return ShapeTracker.from_shape(())
-    # BufferOps and STORE flow ShapeTracker from a direct edge
+    # STORE operations have special shape tracker handling
+    if self.op is Ops.STORE and len(self.src) > 0:
+      if self.src[0].op in {Ops.DEFINE_REG, Ops.DEFINE_GLOBAL}: 
+        return None  # register/global assignments don't have shape trackers
+      # For INDEX-based STORE operations, flow from source 
+      if self.src[0].op is Ops.INDEX: 
+        return self.src[0].st
+      # For buffer STORE operations, use the buffer's shape tracker 
+      if self.src[0].op in {Ops.BUFFER, Ops.BUFFER_VIEW}:
+        return self.src[0].st
+      # For memory STORE operations (other targets), get shape from the value being stored
+      if len(self.src) > 1: 
+        return self.src[1].st
+      # Fallback: return None for other STORE operations
+      return None
+    
+    # BufferOps flow ShapeTracker from a direct edge
     if self.op in GroupOp.Buffer: return views[0] if (views:=[x.st for x in self.src if x.op is Ops.VIEW]) else None
-    if self.op is Ops.STORE and len(self.src) > 0 and self.src[0].op in {Ops.DEFINE_REG, Ops.DEFINE_GLOBAL}: return self.src[0].st
 
     # BUFFER/BUFFER_VIEW and KERNEL only have a size
     if self.op in {Ops.BUFFER, Ops.BUFFER_VIEW}: return ShapeTracker.from_shape((self.size,))
@@ -170,7 +185,15 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   @property
   def shape(self) -> tuple[sint, ...]: return unwrap(self.st).shape
   @property
-  def size(self) -> int: return self.arg[0] if self.op is Ops.BUFFER_VIEW else self.arg if self.op is Ops.BUFFER else unwrap(self.st).size
+  def size(self) -> int: 
+    if self.op is Ops.BUFFER_VIEW: return self.arg[0]
+    if self.op is Ops.BUFFER: return self.arg 
+    if self.st is not None: return self.st.size
+    # For STORE operations without shape trackers (register assignments), return 1
+    if self.op is Ops.STORE and len(self.src) > 0 and self.src[0].op in {Ops.DEFINE_REG, Ops.DEFINE_GLOBAL}: return 1
+    # For movement operations on things without st, fall back to the source
+    if self.op in GroupOp.Movement and len(self.src) > 0: return self.src[0].size
+    return 1  # default fallback
 
   # *** uop evaluation ***
 
@@ -343,7 +366,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
 
   def _mop(self, op:Ops, arg):
     ret = UOp(op, self.dtype, (self,), arg)
-    if self.st == ret.st: return self  # ignore NOOPs, also check ret.st
+    if self.st is not None and ret.st is not None and self.st == ret.st: return self  # ignore NOOPs, also check ret.st
     return ret
 
   def reshape(self, arg:tuple[sint, ...]): return self._mop(Ops.RESHAPE, arg)
