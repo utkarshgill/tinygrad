@@ -1293,7 +1293,7 @@ class Tensor(MathTrait):
     assert all(s >= i for d,(s,i) in enumerate(zip(self.shape, index.shape)) if d != dim), "requires self.shape[d] >= index.shape[d] for all d != dim"
     index = index.to(self.device)
     x = self.shrink(tuple((0, i) if d != dim else None for d,i in enumerate(index.shape))).unsqueeze(-1).transpose(-1, dim)
-    return (x * index.unsqueeze(-1)._one_hot_along_dim(self.shape[dim])).sum(-1, dtype=self.dtype)
+    return (x * index.unsqueeze(-1)._one_hot_along_dim(self.shape[dim])).sum(-1, keepdim=True, dtype=self.dtype).squeeze(-1)
 
   def cat(self:Tensor, *args:Tensor, dim:int=0) -> Tensor:
     """
@@ -1663,7 +1663,7 @@ class Tensor(MathTrait):
     axis = tuple(self._resolve_dim(x) for x in (range(self.ndim) if axis is None else make_tuple(axis, 1)))
     if self.ndim == 0: axis = ()
     ret = self._apply_uop(UOp.r, op=op, axis=axis)
-    return ret if keepdim else ret.reshape(tuple(s for i,s in enumerate(self.shape) if i not in axis))
+    return ret if not keepdim else ret.reshape(tuple(1 if i in axis else s for i, s in enumerate(self.shape)))
 
   def sum(self, axis:int|Sequence[int]|None=None, keepdim=False, dtype:DTypeLike|None=None) -> Tensor:
     """
@@ -2511,7 +2511,7 @@ class Tensor(MathTrait):
     if x.shape[-1] != w.shape[axis_w:=-min(w.ndim,2)]: raise RuntimeError(f"cannot dot {x.shape} and {w.shape}")
     x = x.reshape(*x.shape[0:-1], *[1]*min(dx-1, dw-1, 1), x.shape[-1])
     w = w.reshape(*w.shape[0:-2], *[1]*min(dx-1, dw-1, 1), *w.shape[axis_w:]).transpose(-1, axis_w)
-    return (x*w).sum(-1, dtype=dtype).cast(least_upper_dtype(x.dtype, w.dtype) if dtype is None else dtype)
+    return (x*w).sum(-1, keepdim=True, dtype=dtype).cast(least_upper_dtype(x.dtype, w.dtype) if dtype is None else dtype)
 
   def matmul(self, x:Tensor, reverse=False, dtype:DTypeLike|None=None) -> Tensor:
     """
@@ -2532,7 +2532,7 @@ class Tensor(MathTrait):
     assert self.shape[axis] != 0 and op in (Ops.ADD, Ops.MAX, Ops.MUL)
     pl_sz = self.shape[axis] - int(not _include_initial)
     pooled = self.transpose(axis,-1).pad((pl_sz, -int(_include_initial)), value=identity_element(op, self.dtype))._pool((self.shape[axis],))
-    return {Ops.ADD: pooled.sum(-1), Ops.MAX: pooled.max(-1), Ops.MUL: pooled.prod(-1)}[op].transpose(axis, -1)
+    return {Ops.ADD: pooled.sum(-1, keepdim=True), Ops.MAX: pooled.max(-1, keepdim=True), Ops.MUL: pooled.prod(-1, keepdim=True)}[op].transpose(axis, -1)
 
   def _split_cumalu(self, axis:int, op:Ops) -> Tensor:
     axis = self._resolve_dim(axis)
@@ -3987,7 +3987,7 @@ class Tensor(MathTrait):
     for i in range(int(min(m, n))):
       x = R[..., i:m, i]
       s = -x[..., 0].sign()
-      u1 = x[..., 0] - s * x.square().sum(-1).sqrt()
+      u1 = x[..., 0] - s * x.square().sum(-1, keepdim=True).sqrt()
       w = x.unsqueeze(-1) / u1.reshape(b_shape + 2 * (1,))
       w[..., 0, 0] = 1
       tau = (-s * u1 / x.square().sum(-1).sqrt()).reshape(b_shape + 2 * (1,)).expand(w.shape)
