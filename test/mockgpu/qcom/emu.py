@@ -1,7 +1,14 @@
-import ctypes
+import ctypes, struct
 from collections.abc import Iterator
 from dataclasses import dataclass
 from tinygrad.runtime.autogen import libc, mesa
+
+# IR3 float-immediate lookup table from Mesa ir3-common.xml #flut
+_FLOAT_IMMEDIATE_BITS = (
+  0x00000000, 0x3f000000, 0x3f800000, 0x40000000,
+  0x402df854, 0x40490fdb, 0x3ea2f983, 0x3f317218,
+  0x3fb8aa3b, 0x3e9a209b, 0x40549a78, 0x40800000,
+)
 
 @dataclass(frozen=True)
 class IR3Register:
@@ -85,6 +92,14 @@ def _read_source(fields: Iterator[tuple[str, str | int]], slot: int) -> IR3Sourc
     case 4:
       value = int(_read_field(fields, 'IMMED'))
       if value & 0x400: value -= 0x800
+
+    case 5:
+      index = int(_read_field(fields, 'IMMED'))
+      if index not in range(len(_FLOAT_IMMEDIATE_BITS)):
+        raise ValueError(f'invalid IR3 float immediate {index}')
+      value = struct.unpack('<f', _FLOAT_IMMEDIATE_BITS[index].to_bytes(4, 'little'))[0]
+      if encoded & 0x400:
+        value = struct.unpack('<e', struct.pack('<e', value))[0]
 
     case _:
       raise NotImplementedError(f'unsupported IR3 source encoding {encoded:#x}')

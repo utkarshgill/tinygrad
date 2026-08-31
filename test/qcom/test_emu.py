@@ -34,3 +34,15 @@ def test_decode_integer_immediate():
     ),
   )
   assert decode_ir3(bytes.fromhex('0120060006004042')) == [expected]
+
+def test_decode_float_immediate():
+  expected = IR3Instruction(
+    name='mul.f',
+    dst=IR3Register('r', 6, 0),
+    srcs=(
+      IR3Source(IR3Register('r', 6, 0)),
+      IR3Source(0.3010300099849701),
+    ),
+    ss=True,
+  )
+  assert decode_ir3(bytes.fromhex('1800092818107040')) == [expected]
