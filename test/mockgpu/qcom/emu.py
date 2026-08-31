@@ -11,7 +11,7 @@ class IR3Register:
 
 @dataclass(frozen=True)
 class IR3Source:
-  register: IR3Register
+  value: IR3Register | int | float
   repeat: bool = False
   absolute: bool = False
   negate: bool = False
@@ -65,23 +65,32 @@ def _read_source(fields: Iterator[tuple[str, str | int]], slot: int) -> IR3Sourc
   last = bool(_read_field(fields, 'LAST')) if tag == 0 else False
   absneg = int(_read_field(fields, 'ABSNEG'))
   repeat = bool(_read_field(fields, 'SRC_R'))
-  half = bool(_read_field(fields, 'HALF'))
+  value: IR3Register | int | float
 
   match tag:
     case 0:
-      register = _read_gpr(fields, 'SRC', half)
-      register_mask = 0xff
+      half = bool(_read_field(fields, 'HALF'))
+      value = _read_gpr(fields, 'SRC', half)
+      mask = 0xff
+      if encoded & mask != value.number * 4 + value.component:
+        raise ValueError(f'invalid {field} encoding')
+
     case 2 | 6:
-      register = _read_const(fields, half)
-      register_mask = 0x7ff
+      half = bool(_read_field(fields, 'HALF'))
+      value = _read_const(fields, half)
+      mask = 0x7ff
+      if encoded & mask != value.number * 4 + value.component:
+        raise ValueError(f'invalid {field} encoding')
+
+    case 4:
+      value = int(_read_field(fields, 'IMMED'))
+      if value & 0x400: value -= 0x800
+
     case _:
       raise NotImplementedError(f'unsupported IR3 source encoding {encoded:#x}')
 
-  if encoded & register_mask != register.number * 4 + register.component:
-    raise ValueError(f'invalid {field} encoding')
-
   return IR3Source(
-    register=register,
+    value=value,
     repeat=repeat,
     absolute=bool(absneg & 2),
     negate=bool(absneg & 1),

@@ -23,3 +23,14 @@ def test_decode_add_half_constant():
     repeat=1,
   )
   assert decode_ir3(bytes.fromhex('0600205002090840')) == [expected]
+
+def test_decode_integer_immediate():
+  expected = IR3Instruction(
+    name='sub.u',
+    dst=IR3Register('hr', 1, 2),
+    srcs=(
+      IR3Source(1),
+      IR3Source(IR3Register('hr', 1, 2)),
+    ),
+  )
+  assert decode_ir3(bytes.fromhex('0120060006004042')) == [expected]
