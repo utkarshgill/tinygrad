@@ -49,16 +49,35 @@ def _read_gpr(fields: Iterator[tuple[str, str | int]], field: str, half: bool = 
   if int(_read_field(fields, 'SWIZ')) != register.component: raise ValueError(f'invalid {field} SWIZ')
   return register
 
+def _read_const(fields: Iterator[tuple[str, str | int]], half: bool) -> IR3Register:
+  encoded = int(_read_field(fields, 'SRC'))
+  number = int(_read_field(fields, 'CONST'))
+  component = int(_read_field(fields, 'SWIZ'))
+  if encoded != number * 4 + component:
+    raise ValueError('invalid constant register encoding')
+  return IR3Register('hc' if half else 'c', number, component)
+
 def _read_source(fields: Iterator[tuple[str, str | int]], slot: int) -> IR3Source:
   field = f'SRC{slot}'
   encoded = int(_read_field(fields, field))
-  last = bool(_read_field(fields, 'LAST'))
+  tag = (encoded >> 11) & 0x7
+
+  last = bool(_read_field(fields, 'LAST')) if tag == 0 else False
   absneg = int(_read_field(fields, 'ABSNEG'))
   repeat = bool(_read_field(fields, 'SRC_R'))
   half = bool(_read_field(fields, 'HALF'))
-  register = _read_gpr(fields, 'SRC', half)
 
-  if encoded != register.number * 4 + register.component:
+  match tag:
+    case 0:
+      register = _read_gpr(fields, 'SRC', half)
+      register_mask = 0xff
+    case 2 | 6:
+      register = _read_const(fields, half)
+      register_mask = 0x7ff
+    case _:
+      raise NotImplementedError(f'unsupported IR3 source encoding {encoded:#x}')
+
+  if encoded & register_mask != register.number * 4 + register.component:
     raise ValueError(f'invalid {field} encoding')
 
   return IR3Source(
