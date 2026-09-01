@@ -1,9 +1,16 @@
-import ctypes, struct
+import ctypes, functools, struct
 from collections.abc import Iterator
 from dataclasses import dataclass
+
+from tinygrad import dtypes
+from tinygrad.codegen import to_program
+from tinygrad.device import Buffer, Device
+from tinygrad.engine.realize import get_runtime
+from tinygrad.helpers import Context
+from tinygrad.uop.ops import KernelInfo, UOp
 from tinygrad.runtime.autogen import libc, mesa
 
-# IR3 float-immediate lookup table from Mesa ir3-common.xml #flut
+# IR3 float-immediate lookup table from Mesa ir3-common.xml #flut.
 _FLOAT_IMMEDIATE_BITS = (
   0x00000000, 0x3f000000, 0x3f800000, 0x40000000,
   0x402df854, 0x40490fdb, 0x3ea2f983, 0x3f317218,
@@ -37,11 +44,118 @@ class IR3Instruction:
   ul: bool = False
   ei: bool = False
 
+class WaveState:
+  def __init__(self, lane_count: int, wave_size: int = 64):
+    if not 0 < lane_count <= wave_size:
+      raise ValueError(f'invalid lane count {lane_count}')
+
+    self.lane_count = lane_count
+    self.wave_size = wave_size
+    self.r_buf = Buffer('CPU', 64 * 4 * wave_size, dtypes.uint32).ensure_allocated()
+    self._r = self.r_buf.as_memoryview(force_zero_copy=True).cast('I')
+
+  def _r_index(self, register: IR3Register, lane: int) -> int:
+    if register.kind != 'r':
+      raise ValueError(f'expected full register, got {register.kind}')
+    if not 0 <= register.number < 64 or register.number in (61, 62):
+      raise ValueError(f'invalid full register number {register.number}')
+    if not 0 <= register.component < 4:
+      raise ValueError(f'invalid register component {register.component}')
+    if not 0 <= lane < self.lane_count:
+      raise ValueError(f'invalid lane {lane}')
+    return (register.number * 4 + register.component) * self.wave_size + lane
+
+  def write_r(self, register: IR3Register, lane: int, value: int):
+    self._r[self._r_index(register, lane)] = value & 0xffffffff
+
+  def read_r(self, register: IR3Register, lane: int) -> int:
+    return self._r[self._r_index(register, lane)]
+
+class _IR3UOpContext:
+  def __init__(self, wave_size: int, lane_count: int):
+    self.wave_size = wave_size
+    self.registers = UOp.param(0, dtypes.uint32, 64 * 4 * wave_size)
+    self.lane = UOp.range(lane_count, 0, dtype=dtypes.int)
+
+  def register_index(self, register: int) -> UOp:
+    return UOp.const(register * self.wave_size, dtypes.int) + self.lane
+
+  def read_full(self, register: int) -> UOp:
+    return self.registers.index(self.register_index(register)).load()
+
+  def write_full(self, register: int, value: UOp) -> UOp:
+    return self.registers.index(self.register_index(register)).store(value.cast(dtypes.uint32))
+
+def _apply_float_modifiers(value: UOp, absolute: bool, negate: bool) -> UOp:
+  bits = value.bitcast(dtypes.uint32)
+  if absolute: bits = bits & UOp.const(0x7fffffff, dtypes.uint32)
+  if negate: bits = bits ^ UOp.const(0x80000000, dtypes.uint32)
+  return bits.bitcast(dtypes.float32)
+
+def _compile_runner(store: UOp, lane: UOp, name: str):
+  sink = UOp.sink(store.end(lane)).replace(arg=KernelInfo(name=name)).rtag(1)
+  with Context(NOOPT=1, PROFILE=0):
+    program = to_program(sink, Device['CPU'].renderer)
+    return get_runtime('CPU', program)
+
+@functools.cache
+def _add_f_runner(wave_size: int, lane_count: int, instruction: IR3Instruction):
+  if instruction.dst is None or len(instruction.srcs) != 2:
+    raise ValueError('add.f requires one destination and two sources')
+
+  dst = instruction.dst
+  src0, src1 = instruction.srcs
+  if not isinstance(src0.value, IR3Register) or not isinstance(src1.value, IR3Register):
+    raise NotImplementedError('add.f currently requires register sources')
+
+  dst_index = dst.number * 4 + dst.component
+  src0_index = src0.value.number * 4 + src0.value.component
+  src1_index = src1.value.number * 4 + src1.value.component
+
+  context = _IR3UOpContext(wave_size, lane_count)
+  src0_value = _apply_float_modifiers(
+    context.read_full(src0_index).bitcast(dtypes.float32), src0.absolute, src0.negate)
+  src1_value = _apply_float_modifiers(
+    context.read_full(src1_index).bitcast(dtypes.float32), src1.absolute, src1.negate)
+
+  result = (src0_value + src1_value).bitcast(dtypes.uint32)
+  store = context.write_full(dst_index, result)
+  return _compile_runner(store, context.lane, 'ir3_add_f')
+
+def execute_instruction(state: WaveState, instruction: IR3Instruction):
+  if instruction.name != 'add.f':
+    raise NotImplementedError(f'unsupported IR3 instruction {instruction.name}')
+  if instruction.dst is None or len(instruction.srcs) != 2:
+    raise ValueError('add.f requires one destination and two sources')
+  if instruction.sat or instruction.repeat or any(source.repeat for source in instruction.srcs):
+    raise NotImplementedError('add.f saturation and repeat are not implemented')
+
+  dst = instruction.dst
+  src0, src1 = (source.value for source in instruction.srcs)
+
+  if not isinstance(dst, IR3Register) or dst.kind != 'r':
+    raise NotImplementedError('add.f currently requires a full-register destination')
+  if not isinstance(src0, IR3Register) or not isinstance(src1, IR3Register):
+    raise NotImplementedError('add.f currently requires register sources')
+  if src0.kind != 'r' or src1.kind != 'r':
+    raise NotImplementedError('add.f currently requires full-register sources')
+
+  runner = _add_f_runner(state.wave_size, state.lane_count, instruction)
+  runner(state.r_buf._buf)
+
 def _read_field(fields: Iterator[tuple[str, str | int]], expected_name: str) -> str | int:
   try: name, value = next(fields)
   except StopIteration: raise ValueError(f'missing IR3 field {expected_name}') from None
   if name != expected_name: raise ValueError(f'expected IR3 field {expected_name}, got {name}')
   return value
+
+def _read_repeat(fields: Iterator[tuple[str, str | int]]) -> int:
+  try: name, value = next(fields)
+  except StopIteration: raise ValueError('missing IR3 REPEAT or NOP field') from None
+
+  if name == 'REPEAT': return int(value)
+  if name == 'NOP': return 0
+  raise ValueError(f'expected IR3 field REPEAT or NOP, got {name}')
 
 def _decode_gpr(value: int, half: bool = False) -> IR3Register:
   if not 0 <= value < 256: raise ValueError(f'invalid GPR encoding {value}')
@@ -119,7 +233,7 @@ def _decode_instruction(category: int, raw_fields: list[tuple[str, str | int]]) 
   ss = bool(_read_field(fields, 'SS'))
   jp = bool(_read_field(fields, 'JP'))
   sat = bool(_read_field(fields, 'SAT'))
-  repeat = int(_read_field(fields, 'REPEAT'))
+  repeat = _read_repeat(fields)
   ul = bool(_read_field(fields, 'UL'))
   name = str(_read_field(fields, 'NAME'))
   ei = bool(_read_field(fields, 'EI'))
