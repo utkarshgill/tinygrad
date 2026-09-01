@@ -1,5 +1,5 @@
 import struct, pytest
-from test.mockgpu.qcom.emu import IR3Instruction, IR3Register, IR3Source, WaveState, decode_ir3, execute_instruction
+from test.mockgpu.qcom.emu import IR3Instruction, IR3Register, IR3Source, WaveState, decode_ir3, execute_instruction, execute_instructions
 
 def f32_bits(value: float) -> int:
   return struct.unpack('<I', struct.pack('<f', value))[0]
@@ -64,7 +64,7 @@ def test_decode_add_with_delay_slots():
   assert decode_ir3(bytes.fromhex('0200070002081850')) == [expected]
 
 def test_full_register_storage():
-  state = WaveState(2)
+  state = WaveState(2, 64)
   register = IR3Register('r', 2, 1)
 
   state.write_r(register, 0, 0x12345678)
@@ -74,7 +74,7 @@ def test_full_register_storage():
   assert state.read_r(register, 1) == 0xabcdef01
 
 def test_full_register_storage_rejects_invalid_coordinates():
-  state = WaveState(2)
+  state = WaveState(2, 64)
 
   with pytest.raises(ValueError):
     state.read_r(IR3Register('r', 2, 4), 0)
@@ -84,7 +84,7 @@ def test_full_register_storage_rejects_invalid_coordinates():
 
 def test_execute_add():
   instruction, = decode_ir3(bytes.fromhex('0b0010000b001050'))
-  state = WaveState(2)
+  state = WaveState(2, 64)
 
   state.write_r(IR3Register('r', 2, 3), 0, f32_bits(2.0))
   state.write_r(IR3Register('r', 4, 0), 0, f32_bits(3.0))
@@ -108,7 +108,7 @@ def test_execute_add_source_modifiers():
       IR3Source(src1, negate=True),
     ),
   )
-  state = WaveState(1)
+  state = WaveState(1, 64)
 
   state.write_r(src0, 0, f32_bits(-2.0))
   state.write_r(src1, 0, f32_bits(3.0))
@@ -116,3 +116,22 @@ def test_execute_add_source_modifiers():
   execute_instruction(state, instruction)
 
   assert state.read_r(dst, 0) == f32_bits(-1.0)
+
+def test_decode_end():
+  expected = IR3Instruction(name='end', dst=None, srcs=())
+
+  assert decode_ir3(bytes.fromhex('0000000000000003')) == [expected]
+
+def test_execute_instruction_stream():
+  instructions = decode_ir3(bytes.fromhex(
+    '0b0010000b001050'
+    '0000000000000003'
+  ))
+  state = WaveState(1, 64)
+
+  state.write_r(IR3Register('r', 2, 3), 0, f32_bits(2.0))
+  state.write_r(IR3Register('r', 4, 0), 0, f32_bits(3.0))
+
+  execute_instructions(state, instructions)
+
+  assert state.read_r(IR3Register('r', 2, 3), 0) == f32_bits(5.0)

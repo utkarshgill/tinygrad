@@ -45,40 +45,40 @@ class IR3Instruction:
   ei: bool = False
 
 class WaveState:
-  def __init__(self, lane_count: int, wave_size: int = 64):
-    if not 0 < lane_count <= wave_size:
-      raise ValueError(f'invalid lane count {lane_count}')
+  def __init__(self, fiber_count: int, wave_size: int):
+    if not 0 < fiber_count <= wave_size:
+      raise ValueError(f'invalid fiber count {fiber_count}')
 
-    self.lane_count = lane_count
+    self.fiber_count = fiber_count
     self.wave_size = wave_size
     self.r_buf = Buffer('CPU', 64 * 4 * wave_size, dtypes.uint32).ensure_allocated()
     self._r = self.r_buf.as_memoryview(force_zero_copy=True).cast('I')
 
-  def _r_index(self, register: IR3Register, lane: int) -> int:
+  def _r_index(self, register: IR3Register, fiber: int) -> int:
     if register.kind != 'r':
       raise ValueError(f'expected full register, got {register.kind}')
     if not 0 <= register.number < 64 or register.number in (61, 62):
       raise ValueError(f'invalid full register number {register.number}')
     if not 0 <= register.component < 4:
       raise ValueError(f'invalid register component {register.component}')
-    if not 0 <= lane < self.lane_count:
-      raise ValueError(f'invalid lane {lane}')
-    return (register.number * 4 + register.component) * self.wave_size + lane
+    if not 0 <= fiber < self.fiber_count:
+      raise ValueError(f'invalid fiber {fiber}')
+    return (register.number * 4 + register.component) * self.wave_size + fiber
 
-  def write_r(self, register: IR3Register, lane: int, value: int):
-    self._r[self._r_index(register, lane)] = value & 0xffffffff
+  def write_r(self, register: IR3Register, fiber: int, value: int):
+    self._r[self._r_index(register, fiber)] = value & 0xffffffff
 
-  def read_r(self, register: IR3Register, lane: int) -> int:
-    return self._r[self._r_index(register, lane)]
+  def read_r(self, register: IR3Register, fiber: int) -> int:
+    return self._r[self._r_index(register, fiber)]
 
 class _IR3UOpContext:
-  def __init__(self, wave_size: int, lane_count: int):
+  def __init__(self, wave_size: int, fiber_count: int):
     self.wave_size = wave_size
     self.registers = UOp.param(0, dtypes.uint32, 64 * 4 * wave_size)
-    self.lane = UOp.range(lane_count, 0, dtype=dtypes.int)
+    self.fiber = UOp.range(fiber_count, 0, dtype=dtypes.int)
 
   def register_index(self, register: int) -> UOp:
-    return UOp.const(register * self.wave_size, dtypes.int) + self.lane
+    return UOp.const(register * self.wave_size, dtypes.int) + self.fiber
 
   def read_full(self, register: int) -> UOp:
     return self.registers.index(self.register_index(register)).load()
@@ -92,14 +92,14 @@ def _apply_float_modifiers(value: UOp, absolute: bool, negate: bool) -> UOp:
   if negate: bits = bits ^ UOp.const(0x80000000, dtypes.uint32)
   return bits.bitcast(dtypes.float32)
 
-def _compile_runner(store: UOp, lane: UOp, name: str):
-  sink = UOp.sink(store.end(lane)).replace(arg=KernelInfo(name=name)).rtag(1)
+def _compile_runner(store: UOp, fiber: UOp, name: str):
+  sink = UOp.sink(store.end(fiber)).replace(arg=KernelInfo(name=name)).rtag(1)
   with Context(NOOPT=1, PROFILE=0):
     program = to_program(sink, Device['CPU'].renderer)
     return get_runtime('CPU', program)
 
 @functools.cache
-def _add_f_runner(wave_size: int, lane_count: int, instruction: IR3Instruction):
+def _add_f_runner(wave_size: int, fiber_count: int, instruction: IR3Instruction):
   if instruction.dst is None or len(instruction.srcs) != 2:
     raise ValueError('add.f requires one destination and two sources')
 
@@ -112,7 +112,7 @@ def _add_f_runner(wave_size: int, lane_count: int, instruction: IR3Instruction):
   src0_index = src0.value.number * 4 + src0.value.component
   src1_index = src1.value.number * 4 + src1.value.component
 
-  context = _IR3UOpContext(wave_size, lane_count)
+  context = _IR3UOpContext(wave_size, fiber_count)
   src0_value = _apply_float_modifiers(
     context.read_full(src0_index).bitcast(dtypes.float32), src0.absolute, src0.negate)
   src1_value = _apply_float_modifiers(
@@ -120,7 +120,7 @@ def _add_f_runner(wave_size: int, lane_count: int, instruction: IR3Instruction):
 
   result = (src0_value + src1_value).bitcast(dtypes.uint32)
   store = context.write_full(dst_index, result)
-  return _compile_runner(store, context.lane, 'ir3_add_f')
+  return _compile_runner(store, context.fiber, 'ir3_add_f')
 
 def execute_instruction(state: WaveState, instruction: IR3Instruction):
   if instruction.name != 'add.f':
@@ -140,8 +140,14 @@ def execute_instruction(state: WaveState, instruction: IR3Instruction):
   if src0.kind != 'r' or src1.kind != 'r':
     raise NotImplementedError('add.f currently requires full-register sources')
 
-  runner = _add_f_runner(state.wave_size, state.lane_count, instruction)
+  runner = _add_f_runner(state.wave_size, state.fiber_count, instruction)
   runner(state.r_buf._buf)
+
+def execute_instructions(state: WaveState, instructions: list[IR3Instruction]):
+  for instruction in instructions:
+    if instruction.name == 'end': return
+    execute_instruction(state, instruction)
+  raise ValueError('IR3 instruction stream has no end')
 
 def _read_field(fields: Iterator[tuple[str, str | int]], expected_name: str) -> str | int:
   try: name, value = next(fields)
@@ -181,33 +187,34 @@ def _read_const(fields: Iterator[tuple[str, str | int]], half: bool) -> IR3Regis
 def _read_source(fields: Iterator[tuple[str, str | int]], slot: int) -> IR3Source:
   field = f'SRC{slot}'
   encoded = int(_read_field(fields, field))
-  tag = (encoded >> 11) & 0x7
+  encoding = (encoded >> 11) & 0x7
 
-  last = bool(_read_field(fields, 'LAST')) if tag == 0 else False
+  last = bool(_read_field(fields, 'LAST')) if encoding == 0 else False
   absneg = int(_read_field(fields, 'ABSNEG'))
   repeat = bool(_read_field(fields, 'SRC_R'))
   value: IR3Register | int | float
 
-  match tag:
-    case 0:
+  match encoding:
+    case 0b000:
       half = bool(_read_field(fields, 'HALF'))
       value = _read_gpr(fields, 'SRC', half)
       mask = 0xff
       if encoded & mask != value.number * 4 + value.component:
         raise ValueError(f'invalid {field} encoding')
 
-    case 2 | 6:
+    # Mesa defines constant sources as x10, so both 010 and 110 select a constant register.
+    case 0b010 | 0b110:
       half = bool(_read_field(fields, 'HALF'))
       value = _read_const(fields, half)
       mask = 0x7ff
       if encoded & mask != value.number * 4 + value.component:
         raise ValueError(f'invalid {field} encoding')
 
-    case 4:
+    case 0b100:
       value = int(_read_field(fields, 'IMMED'))
       if value & 0x400: value -= 0x800
 
-    case 5:
+    case 0b101:
       index = int(_read_field(fields, 'IMMED'))
       if index not in range(len(_FLOAT_IMMEDIATE_BITS)):
         raise ValueError(f'invalid IR3 float immediate {index}')
@@ -226,7 +233,24 @@ def _read_source(fields: Iterator[tuple[str, str | int]], slot: int) -> IR3Sourc
     last=last,
   )
 
+def _decode_cat0(raw_fields: list[tuple[str, str | int]]) -> IR3Instruction:
+  fields = iter(raw_fields)
+  sy = bool(_read_field(fields, 'SY'))
+  ss = bool(_read_field(fields, 'SS'))
+  eq = bool(_read_field(fields, 'EQ'))
+  jp = bool(_read_field(fields, 'JP'))
+  repeat = int(_read_field(fields, 'REPEAT'))
+  name = str(_read_field(fields, 'NAME'))
+
+  if name != 'end':
+    raise NotImplementedError(f'unsupported Cat0 instruction {name}')
+  if eq:
+    raise NotImplementedError('Cat0 EQ is not implemented')
+
+  return IR3Instruction(name, None, (), sy=sy, ss=ss, jp=jp, repeat=repeat)
+
 def _decode_instruction(category: int, raw_fields: list[tuple[str, str | int]]) -> IR3Instruction:
+  if category == 0: return _decode_cat0(raw_fields)
   if category != 2: raise NotImplementedError(f'unsupported IR3 category {category}')
   fields = iter(raw_fields)
   sy = bool(_read_field(fields, 'SY'))
