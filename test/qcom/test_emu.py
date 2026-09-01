@@ -60,6 +60,7 @@ def test_decode_add_with_delay_slots():
       IR3Source(IR3Register('r', 1, 3)),
     ),
     sy=True,
+    nop=3,
   )
   assert decode_ir3(bytes.fromhex('0200070002081850')) == [expected]
 
@@ -117,6 +118,11 @@ def test_execute_add_source_modifiers():
 
   assert state.read_r(dst, 0) == f32_bits(-1.0)
 
+def test_decode_nop():
+  expected = IR3Instruction(name='nop', dst=None, srcs=())
+
+  assert decode_ir3(bytes.fromhex('0000000000000000')) == [expected]
+
 def test_decode_end():
   expected = IR3Instruction(name='end', dst=None, srcs=())
 
@@ -124,14 +130,16 @@ def test_decode_end():
 
 def test_execute_instruction_stream():
   instructions = decode_ir3(bytes.fromhex(
-    '0b0010000b001050'
+    '0000000000000000'
+    '0200070002081850'
+    '0200070002081850'
     '0000000000000003'
   ))
   state = WaveState(1, 64)
 
-  state.write_r(IR3Register('r', 2, 3), 0, f32_bits(2.0))
-  state.write_r(IR3Register('r', 4, 0), 0, f32_bits(3.0))
+  state.write_r(IR3Register('r', 0, 2), 0, f32_bits(2.0))
+  state.write_r(IR3Register('r', 1, 3), 0, f32_bits(3.0))
 
   execute_instructions(state, instructions)
 
-  assert state.read_r(IR3Register('r', 2, 3), 0) == f32_bits(5.0)
+  assert state.read_r(IR3Register('r', 0, 2), 0) == f32_bits(8.0)

@@ -41,6 +41,7 @@ class IR3Instruction:
   jp: bool = False
   sat: bool = False
   repeat: int = 0
+  nop: int = 0
   ul: bool = False
   ei: bool = False
 
@@ -146,6 +147,7 @@ def execute_instruction(state: WaveState, instruction: IR3Instruction):
 def execute_instructions(state: WaveState, instructions: list[IR3Instruction]):
   for instruction in instructions:
     if instruction.name == 'end': return
+    if instruction.name == 'nop': continue
     execute_instruction(state, instruction)
   raise ValueError('IR3 instruction stream has no end')
 
@@ -155,12 +157,12 @@ def _read_field(fields: Iterator[tuple[str, str | int]], expected_name: str) -> 
   if name != expected_name: raise ValueError(f'expected IR3 field {expected_name}, got {name}')
   return value
 
-def _read_repeat(fields: Iterator[tuple[str, str | int]]) -> int:
+def _read_repeat_or_nop(fields: Iterator[tuple[str, str | int]]) -> tuple[int, int]:
   try: name, value = next(fields)
   except StopIteration: raise ValueError('missing IR3 REPEAT or NOP field') from None
 
-  if name == 'REPEAT': return int(value)
-  if name == 'NOP': return 0
+  if name == 'REPEAT': return int(value), 0
+  if name == 'NOP': return 0, int(value)
   raise ValueError(f'expected IR3 field REPEAT or NOP, got {name}')
 
 def _decode_gpr(value: int, half: bool = False) -> IR3Register:
@@ -242,7 +244,7 @@ def _decode_cat0(raw_fields: list[tuple[str, str | int]]) -> IR3Instruction:
   repeat = int(_read_field(fields, 'REPEAT'))
   name = str(_read_field(fields, 'NAME'))
 
-  if name != 'end':
+  if name not in ('nop', 'end'):
     raise NotImplementedError(f'unsupported Cat0 instruction {name}')
   if eq:
     raise NotImplementedError('Cat0 EQ is not implemented')
@@ -257,7 +259,7 @@ def _decode_instruction(category: int, raw_fields: list[tuple[str, str | int]]) 
   ss = bool(_read_field(fields, 'SS'))
   jp = bool(_read_field(fields, 'JP'))
   sat = bool(_read_field(fields, 'SAT'))
-  repeat = _read_repeat(fields)
+  repeat, nop = _read_repeat_or_nop(fields)
   ul = bool(_read_field(fields, 'UL'))
   name = str(_read_field(fields, 'NAME'))
   ei = bool(_read_field(fields, 'EI'))
@@ -276,6 +278,7 @@ def _decode_instruction(category: int, raw_fields: list[tuple[str, str | int]]) 
     jp=jp,
     sat=sat,
     repeat=repeat,
+    nop=nop,
     ul=ul,
     ei=ei,
   )
