@@ -52,14 +52,18 @@ class WaveState:
 
     self.fiber_count = fiber_count
     self.wave_size = wave_size
+
     self.r_buf = Buffer('CPU', 64 * 4 * wave_size, dtypes.uint32).ensure_allocated()
     self._r = self.r_buf.as_memoryview(force_zero_copy=True).cast('I')
 
-  def _r_index(self, register: IR3Register, fiber: int) -> int:
-    if register.kind != 'r':
-      raise ValueError(f'expected full register, got {register.kind}')
+    self.hr_buf = Buffer('CPU', 64 * 4 * wave_size, dtypes.uint16).ensure_allocated()
+    self._hr = self.hr_buf.as_memoryview(force_zero_copy=True).cast('H')
+
+  def _register_index(self, register: IR3Register, fiber: int, kind: str) -> int:
+    if register.kind != kind:
+      raise ValueError(f'expected {kind} register, got {register.kind}')
     if not 0 <= register.number < 64 or register.number in (61, 62):
-      raise ValueError(f'invalid full register number {register.number}')
+      raise ValueError(f'invalid {kind} register number {register.number}')
     if not 0 <= register.component < 4:
       raise ValueError(f'invalid register component {register.component}')
     if not 0 <= fiber < self.fiber_count:
@@ -67,10 +71,16 @@ class WaveState:
     return (register.number * 4 + register.component) * self.wave_size + fiber
 
   def write_r(self, register: IR3Register, fiber: int, value: int):
-    self._r[self._r_index(register, fiber)] = value & 0xffffffff
+    self._r[self._register_index(register, fiber, 'r')] = value & 0xffffffff
 
   def read_r(self, register: IR3Register, fiber: int) -> int:
-    return self._r[self._r_index(register, fiber)]
+    return self._r[self._register_index(register, fiber, 'r')]
+
+  def write_hr(self, register: IR3Register, fiber: int, value: int):
+    self._hr[self._register_index(register, fiber, 'hr')] = value & 0xffff
+
+  def read_hr(self, register: IR3Register, fiber: int) -> int:
+    return self._hr[self._register_index(register, fiber, 'hr')]
 
 class _IR3UOpContext:
   def __init__(self, wave_size: int, fiber_count: int):

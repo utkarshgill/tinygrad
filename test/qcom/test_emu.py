@@ -143,3 +143,13 @@ def test_execute_instruction_stream():
   execute_instructions(state, instructions)
 
   assert state.read_r(IR3Register('r', 0, 2), 0) == f32_bits(8.0)
+
+def test_half_register_storage():
+  state = WaveState(2, 64)
+  register = IR3Register('hr', 2, 1)
+
+  state.write_hr(register, 0, 0x12345)
+  state.write_hr(register, 1, 0xabcd)
+
+  assert state.read_hr(register, 0) == 0x2345
+  assert state.read_hr(register, 1) == 0xabcd
