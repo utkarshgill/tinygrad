@@ -4,6 +4,9 @@ from test.mockgpu.qcom.emu import IR3Instruction, IR3Register, IR3Source, WaveSt
 def f32_bits(value: float) -> int:
   return struct.unpack('<I', struct.pack('<f', value))[0]
 
+def f16_bits(value: float) -> int:
+  return struct.unpack('<H', struct.pack('<e', value))[0]
+
 def test_decode_add():
   expected = IR3Instruction(
     name='add.f',
@@ -117,6 +120,63 @@ def test_execute_add_source_modifiers():
   execute_instruction(state, instruction)
 
   assert state.read_r(dst, 0) == f32_bits(-1.0)
+
+def test_execute_half_add():
+  dst = IR3Register('hr', 0, 0)
+  src0 = IR3Register('hr', 1, 0)
+  src1 = IR3Register('hr', 2, 0)
+  instruction = IR3Instruction(
+    name='add.f',
+    dst=dst,
+    srcs=(IR3Source(src0), IR3Source(src1)),
+  )
+  state = WaveState(2, 64)
+
+  state.write_hr(src0, 0, f16_bits(1.5))
+  state.write_hr(src1, 0, f16_bits(2.25))
+  state.write_hr(src0, 1, f16_bits(-4.0))
+  state.write_hr(src1, 1, f16_bits(1.5))
+
+  execute_instruction(state, instruction)
+
+  assert state.read_hr(dst, 0) == f16_bits(3.75)
+  assert state.read_hr(dst, 1) == f16_bits(-2.5)
+
+def test_execute_half_to_full_add_rounds_to_half():
+  dst = IR3Register('r', 0, 0)
+  src0 = IR3Register('hr', 1, 0)
+  src1 = IR3Register('hr', 2, 0)
+  instruction = IR3Instruction(
+    name='add.f',
+    dst=dst,
+    srcs=(IR3Source(src0), IR3Source(src1)),
+  )
+  state = WaveState(1, 64)
+
+  state.write_hr(src0, 0, f16_bits(1.0))
+  state.write_hr(src1, 0, f16_bits(2**-12))
+
+  execute_instruction(state, instruction)
+
+  assert state.read_r(dst, 0) == f32_bits(1.0)
+
+def test_execute_full_to_half_add():
+  dst = IR3Register('hr', 0, 0)
+  src0 = IR3Register('r', 1, 0)
+  src1 = IR3Register('r', 2, 0)
+  instruction = IR3Instruction(
+    name='add.f',
+    dst=dst,
+    srcs=(IR3Source(src0), IR3Source(src1)),
+  )
+  state = WaveState(1, 64)
+
+  state.write_r(src0, 0, f32_bits(1.0004))
+  state.write_r(src1, 0, f32_bits(0.0004))
+
+  execute_instruction(state, instruction)
+
+  assert state.read_hr(dst, 0) == f16_bits(1.0009765625)
 
 def test_decode_nop():
   expected = IR3Instruction(name='nop', dst=None, srcs=())

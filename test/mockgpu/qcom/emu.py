@@ -7,7 +7,7 @@ from tinygrad.codegen import to_program
 from tinygrad.device import Buffer, Device
 from tinygrad.engine.realize import get_runtime
 from tinygrad.helpers import Context
-from tinygrad.uop.ops import KernelInfo, UOp
+from tinygrad.uop.ops import AddrSpace, KernelInfo, UOp
 from tinygrad.runtime.autogen import libc, mesa
 
 # IR3 float-immediate lookup table from Mesa ir3-common.xml #flut.
@@ -83,25 +83,41 @@ class WaveState:
     return self._hr[self._register_index(register, fiber, 'hr')]
 
 class _IR3UOpContext:
-  def __init__(self, wave_size: int, fiber_count: int):
+  def __init__(self, wave_size: int, fiber_count: int, register_kinds: tuple[str, ...]):
     self.wave_size = wave_size
-    self.registers = UOp.param(0, dtypes.uint32, 64 * 4 * wave_size)
+    self.registers = {
+      kind: UOp.param(slot, dtypes.uint32 if kind == 'r' else dtypes.uint16, 64 * 4 * wave_size)
+      for slot, kind in enumerate(register_kinds)
+    }
     self.fiber = UOp.range(fiber_count, 0, dtype=dtypes.int)
 
-  def register_index(self, register: int) -> UOp:
-    return UOp.const(register * self.wave_size, dtypes.int) + self.fiber
+  def register_index(self, register: IR3Register) -> UOp:
+    flat = register.number * 4 + register.component
+    return UOp.const(flat * self.wave_size, dtypes.int) + self.fiber
 
-  def read_full(self, register: int) -> UOp:
-    return self.registers.index(self.register_index(register)).load()
+  def register_buffer(self, register: IR3Register) -> UOp:
+    try:
+      return self.registers[register.kind]
+    except KeyError:
+      raise ValueError(f'unsupported UOp register kind {register.kind}') from None
 
-  def write_full(self, register: int, value: UOp) -> UOp:
-    return self.registers.index(self.register_index(register)).store(value.cast(dtypes.uint32))
+  def read_register(self, register: IR3Register) -> UOp:
+    return self.register_buffer(register).index(self.register_index(register)).load()
+
+  def write_register(self, register: IR3Register, value: UOp) -> UOp:
+    return self.register_buffer(register).index(self.register_index(register)).store(value)
 
 def _apply_float_modifiers(value: UOp, absolute: bool, negate: bool) -> UOp:
-  bits = value.bitcast(dtypes.uint32)
-  if absolute: bits = bits & UOp.const(0x7fffffff, dtypes.uint32)
-  if negate: bits = bits ^ UOp.const(0x80000000, dtypes.uint32)
-  return bits.bitcast(dtypes.float32)
+  if value.dtype == dtypes.float16:
+    bit_dtype, sign_bit = dtypes.uint16, 0x8000
+  elif value.dtype == dtypes.float32:
+    bit_dtype, sign_bit = dtypes.uint32, 0x80000000
+  else: raise ValueError(f'unsupported float modifier dtype {value.dtype}')
+
+  bits = value.bitcast(bit_dtype)
+  if absolute: bits = bits & UOp.const(sign_bit - 1, bit_dtype)
+  if negate: bits = bits ^ UOp.const(sign_bit, bit_dtype)
+  return bits.bitcast(value.dtype)
 
 def _compile_runner(store: UOp, fiber: UOp, name: str):
   sink = UOp.sink(store.end(fiber)).replace(arg=KernelInfo(name=name)).rtag(1)
@@ -118,20 +134,29 @@ def _add_f_runner(wave_size: int, fiber_count: int, instruction: IR3Instruction)
   src0, src1 = instruction.srcs
   if not isinstance(src0.value, IR3Register) or not isinstance(src1.value, IR3Register):
     raise NotImplementedError('add.f currently requires register sources')
+  if dst.kind not in ('r', 'hr') or src0.value.kind not in ('r', 'hr') or src1.value.kind != src0.value.kind:
+    raise NotImplementedError('add.f currently requires matching source register widths')
 
-  dst_index = dst.number * 4 + dst.component
-  src0_index = src0.value.number * 4 + src0.value.component
-  src1_index = src1.value.number * 4 + src1.value.component
+  source_dtype = dtypes.float16 if src0.value.kind == 'hr' else dtypes.float32
+  destination_dtype = dtypes.float16 if dst.kind == 'hr' else dtypes.float32
+  destination_bits = dtypes.uint16 if dst.kind == 'hr' else dtypes.uint32
+  register_kinds = tuple(kind for kind in ('r', 'hr') if kind in (dst.kind, src0.value.kind))
 
-  context = _IR3UOpContext(wave_size, fiber_count)
+  context = _IR3UOpContext(wave_size, fiber_count, register_kinds)
   src0_value = _apply_float_modifiers(
-    context.read_full(src0_index).bitcast(dtypes.float32), src0.absolute, src0.negate)
+    context.read_register(src0.value).bitcast(source_dtype), src0.absolute, src0.negate)
   src1_value = _apply_float_modifiers(
-    context.read_full(src1_index).bitcast(dtypes.float32), src1.absolute, src1.negate)
+    context.read_register(src1.value).bitcast(source_dtype), src1.absolute, src1.negate)
 
-  result = (src0_value + src1_value).bitcast(dtypes.uint32)
-  store = context.write_full(dst_index, result)
-  return _compile_runner(store, context.fiber, 'ir3_add_f')
+  result = src0_value + src1_value
+  if source_dtype == dtypes.float16 and destination_dtype == dtypes.float32:
+    rounded_bits = UOp.placeholder((fiber_count,), dtypes.uint16, slot=0, addrspace=AddrSpace.REG)
+    rounding_store = rounded_bits.index(context.fiber).store(result.bitcast(dtypes.uint16))
+    result = rounded_bits.after(rounding_store).index(context.fiber).load().bitcast(dtypes.float16)
+
+  result = result.cast(destination_dtype).bitcast(destination_bits)
+  store = context.write_register(dst, result)
+  return _compile_runner(store, context.fiber, 'ir3_add_f'), register_kinds
 
 def execute_instruction(state: WaveState, instruction: IR3Instruction):
   if instruction.name != 'add.f':
@@ -142,17 +167,18 @@ def execute_instruction(state: WaveState, instruction: IR3Instruction):
     raise NotImplementedError('add.f saturation and repeat are not implemented')
 
   dst = instruction.dst
-  src0, src1 = (source.value for source in instruction.srcs)
+  src0_value, src1_value = (source.value for source in instruction.srcs)
 
-  if not isinstance(dst, IR3Register) or dst.kind != 'r':
-    raise NotImplementedError('add.f currently requires a full-register destination')
-  if not isinstance(src0, IR3Register) or not isinstance(src1, IR3Register):
+  if not isinstance(dst, IR3Register) or dst.kind not in ('r', 'hr'):
+    raise NotImplementedError('add.f currently requires a general-register destination')
+  if not isinstance(src0_value, IR3Register) or not isinstance(src1_value, IR3Register):
     raise NotImplementedError('add.f currently requires register sources')
-  if src0.kind != 'r' or src1.kind != 'r':
-    raise NotImplementedError('add.f currently requires full-register sources')
+  if src0_value.kind not in ('r', 'hr') or src1_value.kind != src0_value.kind:
+    raise NotImplementedError('add.f currently requires matching source register widths')
 
-  runner = _add_f_runner(state.wave_size, state.fiber_count, instruction)
-  runner(state.r_buf._buf)
+  runner, register_kinds = _add_f_runner(state.wave_size, state.fiber_count, instruction)
+  buffers = {'r': state.r_buf, 'hr': state.hr_buf}
+  runner(*(buffers[kind]._buf for kind in register_kinds))
 
 def execute_instructions(state: WaveState, instructions: list[IR3Instruction]):
   for instruction in instructions:
